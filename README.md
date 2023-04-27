@@ -20,4 +20,9 @@ Note also that sqlite databases for CC founder SNPs and MGI mouse genes are on f
 - cc_variants.sqlite: [doi:10.6084/m9.figshare.5280229.v2](https://doi.org/10.6084/m9.figshare.5280229.v2)
 - mouse_genes_mgi.sqlite: [doi:10.6084/m9.figshare.5286019.v5](https://doi.org/10.6084/m9.figshare.5286019.v5)
 
+`CCmouse` is a local symbolic link to `~/Documents/Research/qtl2shinyApp`, which has files in it used for [qtl2shiny](https://github.com/byandell/qtl2shiny).
+Additional data are in local `data` folder.
+
+See recent update of SNP database documented by Karl Broman at <https://kbroman.org/qtl2/pages/move_to_build39.html>.
+
 

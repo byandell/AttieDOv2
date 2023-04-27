@@ -36,7 +36,7 @@ if(!dir.exists(project_dir)) {
 ```
 
 ```{r}
-datapath <- "DerivedData"
+datapath <- "data/DerivedData"
 ```
 
 ## Query functions

@@ -11,7 +11,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 This has only part of the AttieDO (version 1) data. See the [setup_qtl2shiny.Rmd](https://github.com/byandell/DOread/blob/master/inst/DerivedData/setup_qtl2shiny.Rmd) and various routines in [R/DOread](https://github.com/byandell/DOread).
 See [README.md](~/Documents/Research/attie_alan/DO/data/DerivedData/README.md)
-in the `DerivedData` folder for further information.
+in the `data/DerivedData` folder for further information.
 
 ```{r message=FALSE}
 library(dplyr)
