@@ -1,0 +1,702 @@
+---
+title: 'SNP, Haplo- & Diplo-types: Chr 16 GLP1 G8.3'
+author: "Brian S Yandell"
+date: "1 January 2018"
+output:
+  pdf_document: default
+  html_document: default
+params:
+  chr_id: '16'
+  datapath: ~/Documents/Research/qtl2shiny/qtl2shinyData
+  peak_Mbp: 89
+  pheno_names: GLP1_G83_ins_secrete
+  snp_action: add+dom
+  window_Mbp: 5
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, comment = "")
+```
+
+This came from "~/Documents/Research/attie_alan/DO/doqtl2/inst/tests".
+See [~/Documents/Research/attie_alan/DO/doqtl2/inst/tests/glp1chr16.html](file:///Users/brianyandell/Documents/Research/attie_alan/DO/doqtl2/inst/tests/glp1chr16.html). See also TrackHub developed by Sunduz Keles: <http://genome.ucsc.edu/cgi-bin/hgTracks?hgS_doOtherUser=submit&hgS_otherUserName=cdong39&hgS_otherUserSessionName=AlanAttieATAC>. Also useful material in [R eqtl project](~/Documents/Research/attie_alan/DO/eqtl) and some other projects in that parent folder.
+  
+```{r child="setup.Rmd"}
+```
+
+This document relates the 8 haplotypes to the 36 diplotypes and to 2- or 3-level SNP genotypes. Basically, the 36 diplotypes are collapsed into 8 haplotypes by adding up genotype probabilities across allele pairs for each allele. In fact, the diplotypes were originally imputed from the 3-level SNPs on the SNP chip. If SNPs have additive effects on a phenotype, then one need only consider the haplotypes and map them to 2-level SNPs. However, for more general gene action (or SNP action), the diplotypes and 3-level SNPs need to be examined.
+
+We can identify the gene action of a SNP by looking at its 3-level version, which is derived from the 36 diplotypes. That is, what is the relationship of phenotype mean to the number of copies of the non-B allele of a SNP?
+This is developed below in the example.
+
+## Mouse genes: Hunk
+
+```{r}
+query_genes <- 
+  qtl2::create_gene_query_func(
+    file.path(project_info$directory, project_info$taxa, "mouse_genes_mgi.sqlite"))
+genes <- query_genes(chr_id, scan_window[1], scan_window[2])
+```
+
+```{r}
+m <- grep("Hunk", genes$Name)
+genes[m,, drop=FALSE]
+```
+
+```{r}
+hunk <- mean(unlist(genes[m, c("start","stop")]))
+```
+
+
+## Genome scan
+
+We focus on the `r pheno_name` phenotype for insulin secretion and the peak on chr `r chr_id` at `r peak_Mbp``Mbp`. Here is the genome scan and the haplotype allele scan.
+
+```{r}
+scan_obj <- qtl2::scan1(subset(probs_obj, chr = chr_id), 
+                  phe_df, K_chr[[chr_id]],  addcovar)
+```
+
+```{r}
+addcovar3 <- addcovar[apply(addcovar[,c("DOwave4","DOwave5")], 1, sum) == 0, ]
+scan3_obj <- qtl2::scan1(subset(probs_obj, chr = chr_id), 
+                  phe_df, K_chr[[chr_id]],  addcovar3)
+colnames(scan3_obj) <- "wave3"
+```
+
+```{r}
+addcovar4 <- addcovar[addcovar[,"DOwave5"] == 0, ]
+scan4_obj <- qtl2::scan1(subset(probs_obj, chr = chr_id), 
+                  phe_df, K_chr[[chr_id]],  addcovar4)
+colnames(scan4_obj) <- "wave4"
+```
+
+```{r}
+scans <- cbind(scan_obj, scan3_obj, scan4_obj)
+```
+
+```{r}
+(sum_obj <- qtl2::find_peaks(scans, pmap[chr_id]))
+```
+
+```{r}
+ggplot2::autoplot(scans, pmap[chr_id], 1:3) +
+  ggplot2::geom_vline(xintercept = sum_obj$pos, linetype = 2) +
+  ggplot2::geom_vline(xintercept = hunk, linetype = 3, size = 1, col = "red")
+```
+
+```{r}
+ggplot2::autoplot(scan1coef(probs_obj, phe_df, K_chr[[chr_id]], addcovar),
+                  pmap) +
+  ggplot2::geom_vline(xintercept = sum_obj$pos, linetype = 2) +
+  ggplot2::geom_vline(xintercept = hunk, linetype = 3, size = 1, col = "red")
+```
+
+Here is the SNP scan using the 2-level additive SNPs.
+
+
+```{r}
+query_variants <- 
+  qtl2::create_variant_query_func(
+    file.path(project_info$directory, project_info$taxa, "cc_variants.sqlite"))
+snpinfo <- query_variants(chr_id, scan_window[1], scan_window[2])
+```
+
+```{r}
+snpprobs_obj <- qtl2pattern::get_snpprobs(chr_id, 
+                   peak_Mbp, 
+                   window_Mbp,
+                   pheno_names, 
+                   probs_obj,
+                   pmap[chr_id],
+                   snpinfo = snpinfo)
+snpinfo <- snpprobs_obj$snpinfo
+snpprobs_obj <- snpprobs_obj$snpprobs
+```
+
+```{r}
+snpscan_obj <- scan1(snpprobs_obj, phe_df, K_chr[[chr_id]], addcovar)
+```
+
+```{r}
+ggplot2::autoplot(snpscan_obj, snpinfo, main="additive",
+                  show_all_snps = FALSE, drop_hilit = 1.5) +
+  ggplot2::geom_vline(xintercept = sum_obj$pos, linetype = 2) +
+  ggplot2::geom_vline(xintercept = hunk, linetype = 3, size = 1, col = "red")
+```
+
+```{r}
+ggplot2::autoplot(snpscan_obj, snpinfo, main="additive",
+                  show_all_snps = FALSE, drop_hilit = .5,
+                  patterns = "hilit") +
+  ggplot2::geom_vline(xintercept = sum_obj$pos, linetype = 2) +
+  ggplot2::geom_vline(xintercept = hunk, linetype = 3, size = 1, col = "red")
+```
+
+## 36 Allele Pairs
+
+```{r}
+## Get genotype (diplotype) probabilities. 
+probs36_obj <- query_probs(chr_id, scan_window[1], scan_window[2], FALSE)
+pmap36 <- probs36_obj$map
+probs36_obj <- probs36_obj$probs
+```
+
+```{r}
+pattern <- "0:0:0:0:0:0:1:0" # G=PWK
+```
+
+```{r}
+haplos <- dimnames(probs_obj[[1]])[[2]]
+diplos <- dimnames(probs36_obj[[1]])[[2]]
+founders <- haplos
+names(founders) <- haplos
+```
+
+## 3-Level SNP Tests
+
+```{r}
+snpprobs36_obj <- qtl2pattern::get_snpprobs(chr_id, 
+                   peak_Mbp, 
+                   window_Mbp,
+                   pheno_names, 
+                   probs36_obj,
+                   pmap[chr_id],
+                   snpinfo = snpinfo)
+```
+
+Here is a scan using the 3-level diploid SNPs.
+
+```{r}
+## additive + dominance
+snpscan36_obj <- scan1(snpprobs36_obj$snpprobs, phe_df, K_chr[[chr_id]], addcovar)
+```
+
+```{r}
+ggplot2::autoplot(snpscan36_obj, snpprobs36_obj$snpinfo, main = "additive & dominace",
+                  show_all_snps = FALSE, drop_hilit = 1.5) +
+  ggplot2::geom_vline(xintercept = sum_obj$pos, linetype = 2) +
+  ggplot2::geom_vline(xintercept = hunk, linetype = 3, size = 1, col = "red")
+```
+
+```{r}
+ggplot2::autoplot(snpscan36_obj, snpprobs36_obj$snpinfo, main = "additive & dominace",
+                  show_all_snps = FALSE, drop_hilit = 1.5, patterns = "hilit") +
+  ggplot2::geom_vline(xintercept = sum_obj$pos, linetype = 2) +
+  ggplot2::geom_vline(xintercept = hunk, linetype = 3, size = 1, col = "red")
+```
+
+Here are scans for various dominance contrasts. Different patterns emerge from these.
+
+```{r}
+tmplot <- function(snpprobs36_obj, contname, phe_df, K_chr, addcovar, patterns = "none",
+                   drop_hilit = 1.5) {
+  lmmbr <- scan1(snpprob_collapse(snpprobs36_obj$snpprobs, contname), 
+                 phe_df, K_chr, addcovar)
+  ggplot2::autoplot(lmmbr, snpprobs36_obj$snpinfo, main = contname,
+                    show_all_snps = FALSE, drop_hilit = drop_hilit, patterns = patterns) +
+    ggplot2::geom_vline(xintercept = sum_obj$pos, linetype = 2) +
+    ggplot2::geom_vline(xintercept = hunk, linetype = 3, size = 1, col = "red")
+}
+```
+
+```{r}
+## additive
+tmplot(snpprobs36_obj, "additive", phe_df, K_chr[[chr_id]], addcovar, drop_hilit = 0.5)
+```
+
+```{r}
+## recessive
+tmplot(snpprobs36_obj, "recessive", phe_df, K_chr[[chr_id]], addcovar)
+```
+
+```{r}
+## non-additive
+tmplot(snpprobs36_obj, "non-add", phe_df, K_chr[[chr_id]], addcovar)
+```
+
+```{r}
+## B6 dominant
+tmplot(snpprobs36_obj, "dominant", phe_df, K_chr[[chr_id]], addcovar)
+```
+
+```{r}
+## dominant
+tmplot(snpprobs36_obj, "dominant", phe_df, K_chr[[chr_id]], addcovar, patterns = "hilit")
+```
+
+## Top SNPs for Additive and Dominance 
+
+Below, we collect best patterns with best gene action,
+then organize into pattern list to collapse 36 into subset.
+
+```{r}
+patterns <- qtl2pattern::top_snps_all(snpscan36_obj, snpprobs36_obj$snpinfo, show_all_snps = FALSE)
+dplyr::arrange(
+  summary(patterns),
+  dplyr::desc(max_lod))
+```
+
+```{r}
+(patterns_dom <- 
+   dplyr::arrange(
+     summary(
+       qtl2pattern::top_snps_all(
+         scan1(snpprob_collapse(snpprobs36_obj$snpprobs, "dominant"), 
+               phe_df, K_chr[[chr_id]], addcovar),
+         snpprobs36_obj$snpinfo, show_all_snps = FALSE)),
+     dplyr::desc(max_lod)))
+```
+
+### Scan Patterns
+
+```{r}
+scanpat <- qtl2pattern::scan_pattern(probs36_obj, 
+                                     phe_df, K_chr[chr_id], covar = addcovar, pmap36, 
+                                     patterns_dom,
+                                     condense_patterns = TRUE, blups = FALSE, do_scans = TRUE)
+```
+
+```{r}
+ggplot2::autoplot(scanpat, pmap36) +
+  ggplot2::geom_vline(xintercept = sum_obj$pos, linetype = 2) +
+  ggplot2::geom_vline(xintercept = hunk, linetype = 3, size = 1, col = "red") +
+  ggplot2::geom_vline(xintercept = patterns_dom$max_pos, linetype = 3, size = 1, col = "blue")
+```
+
+```{r}
+ggplot2::autoplot(scanpat, pmap36, plot_type = "coef") +
+    ggplot2::geom_vline(xintercept = sum_obj$pos, linetype = 2) +
+  ggplot2::geom_vline(xintercept = hunk, linetype = 3, size = 1, col = "red") +
+  ggplot2::geom_vline(xintercept = patterns_dom$max_pos, linetype = 3, size = 1, col = "blue")
+```
+
+## Analysis
+
+This is a very beginning of analysis. The first "traditional" analysis (`trad`) uses the haplotypes at the best genome scan position. The second "SNP" analysis (`snp`) uses SNPs identified from additive and dominance effects.
+
+Both analyses are highly significant if viewed as F tests on their own; both explain about 30% of the variation.
+
+#### SNP Analysis
+
+```{r}
+snpmap <- qtl2:::snpinfo_to_map(snpprobs36_obj$snpinfo)[[1]]
+wh <- match(patterns_dom$max_snp, names(snpmap))[1]
+geno36 <- qtl2::maxmarg(snpprobs36_obj$snpprobs)
+doms <- geno36[[1]][,wh, drop=FALSE]
+dom_snp <- colnames(doms)
+data_snp <- data.frame(phe_df,doms,cov_df)
+data_snp[[dom_snp]] <- ordered(data_snp[[dom_snp]])
+fit_snp <- lm(formula(paste(pheno_name, "~",
+                            paste(names(data_snp)[-1], collapse = "+"))),
+               data_snp)
+anova(fit_snp)
+drop1(fit_snp, fit_snp, test="F")
+```
+
+```{r}
+ggplot2::ggplot(data_snp) +
+  ggplot2::aes(x=rs4219805, y=GLP1_G83_ins_secrete) +
+  ggplot2::geom_jitter(alpha=0.25, height = 0, width = 0.1) +
+  ggplot2::stat_summary(fun.y = mean, geom="point", col="red", shape=1, size = 2) +
+  ggplot2::facet_grid(sex ~ DOwave)
+```
+
+#### Use best QTL as covariate
+
+```{r}
+covs <- data.frame(doms,cov_df)
+f <- formula(paste("~", paste(names(covs), collapse = "+")))
+addcovar2 <- model.matrix(f, covs)[,-1, drop = FALSE]
+```
+
+```{r}
+## additive + dominance
+snpscan36_obj2 <- scan1(snpprobs36_obj$snpprobs, phe_df, K_chr[[chr_id]], addcovar2)
+```
+
+```{r}
+ggplot2::autoplot(snpscan36_obj2, snpprobs36_obj$snpinfo, main = "additive & dominace",
+                  show_all_snps = FALSE, drop_hilit = .5) +
+  ggplot2::geom_vline(xintercept = sum_obj$pos, linetype = 2) +
+  ggplot2::geom_vline(xintercept = hunk, linetype = 3, size = 1, col = "red")
+```
+
+```{r}
+ggplot2::autoplot(snpscan36_obj2, snpprobs36_obj$snpinfo, main = "additive & dominace",
+                  show_all_snps = FALSE, drop_hilit = .5, patterns = "hilit") +
+  ggplot2::geom_vline(xintercept = sum_obj$pos, linetype = 2) +
+  ggplot2::geom_vline(xintercept = hunk, linetype = 3, size = 1, col = "red")
+```
+
+#### Refit scan patterns after removing QTL effect
+
+```{r}
+(patterns2 <- 
+   dplyr::arrange(
+     summary(
+       qtl2pattern::top_snps_all(
+         snpscan36_obj2,
+         snpprobs36_obj$snpinfo, show_all_snps = FALSE)),
+     dplyr::desc(max_lod)))
+```
+
+```{r}
+scanpat2 <- qtl2pattern::scan_pattern(probs36_obj, 
+                                     phe_df, K_chr[chr_id], covar = addcovar2, pmap36, 
+                                     head(patterns2, 1),
+                                     condense_patterns = TRUE, blups = FALSE, do_scans = TRUE)
+```
+
+```{r}
+ggplot2::autoplot(scanpat2, pmap36) +
+  ggplot2::geom_vline(xintercept = sum_obj$pos, linetype = 2) +
+  ggplot2::geom_vline(xintercept = hunk, linetype = 3, size = 1, col = "red") +
+  ggplot2::geom_vline(xintercept = patterns_dom$max_pos, linetype = 3, size = 1, col = "blue")
+```
+
+```{r}
+ggplot2::autoplot(scanpat2, pmap36, plot_type = "coef") +
+    ggplot2::geom_vline(xintercept = sum_obj$pos, linetype = 2) +
+  ggplot2::geom_vline(xintercept = hunk, linetype = 3, size = 1, col = "red") +
+  ggplot2::geom_vline(xintercept = patterns_dom$max_pos, linetype = 3, size = 1, col = "blue")
+```
+
+#### ANOVA with 2 QTL
+
+```{r}
+wh <- match(patterns2$max_snp, names(snpmap))[1]
+dom2 <- geno36[[1]][,wh, drop=FALSE]
+dom_snp <- colnames(dom2)
+data_snp2 <- data.frame(data_snp,dom2)
+data_snp2[[dom_snp]] <- ordered(data_snp2[[dom_snp]])
+fit_snp2 <- lm(formula(paste(pheno_name, "~",
+                            paste(names(data_snp2)[-1], collapse = "+"))),
+               data_snp2)
+anova(fit_snp2)
+drop1(fit_snp2, fit_snp2, test="F")
+```
+
+```{r}
+fit_snp2i <- lm(formula(paste0(pheno_name, "~",
+                              paste(names(data_snp2)[-1], collapse = "+"),
+                              "+", colnames(doms), ":", colnames(dom2))),
+               data_snp2)
+anova(fit_snp2, fit_snp2i, test="F")
+```
+
+
+```{r}
+tmp <- numeric(nrow(data_snp))
+names(tmp) <- rownames(data_snp)
+f <- formula(paste("~", paste(names(data_snp), collapse = "+")))
+tmp2 <- model.matrix(f, data_snp)[,-1, drop = FALSE]
+mna <- qtl2::get_common_ids(tmp2, complete.cases = TRUE)
+tmp[mna] <- resid(fit_snp)
+data_snp2$resid <- tmp
+```
+
+```{r}
+ggplot2::ggplot(data_snp2) +
+  ggplot2::aes(x=rs4219805, y=GLP1_G83_ins_secrete, col = DOwave) +
+  ggplot2::geom_jitter(alpha=0.25, height = 0, width = 0.1) +
+  ggplot2::stat_summary(fun.y = mean, geom="point", col="red", shape=1, size = 2) +
+  ggplot2::facet_grid(sex ~ rs258710327)
+```
+
+#### Use best 2nd QTL as covariate
+
+```{r}
+covs <- data.frame(doms,dom2,cov_df)
+f <- formula(paste("~", paste(names(covs), collapse = "+")))
+addcovar3 <- model.matrix(f, covs)[,-1, drop = FALSE]
+```
+
+```{r}
+## additive + dominance
+snpscan36_obj3 <- scan1(snpprobs36_obj$snpprobs, phe_df, K_chr[[chr_id]], addcovar3)
+```
+
+```{r}
+ggplot2::autoplot(snpscan36_obj3, snpprobs36_obj$snpinfo, main = "additive & dominace",
+                  show_all_snps = FALSE, drop_hilit = .5) +
+  ggplot2::geom_vline(xintercept = sum_obj$pos, linetype = 2) +
+  ggplot2::geom_vline(xintercept = hunk, linetype = 3, size = 1, col = "red")
+```
+
+```{r}
+ggplot2::autoplot(snpscan36_obj3, snpprobs36_obj$snpinfo, main = "additive & dominace",
+                  show_all_snps = FALSE, drop_hilit = .5, patterns = "hilit") +
+  ggplot2::geom_vline(xintercept = sum_obj$pos, linetype = 2) +
+  ggplot2::geom_vline(xintercept = hunk, linetype = 3, size = 1, col = "red")
+```
+
+```{r}
+(patterns3 <- 
+   dplyr::arrange(
+     summary(
+       qtl2pattern::top_snps_all(
+         snpscan36_obj3,
+         snpprobs36_obj$snpinfo, show_all_snps = FALSE, drop = 0.5)),
+     dplyr::desc(max_lod)))
+```
+
+#### Interpretation
+
+It appears that there is evidence for two QTL with different gene action, at positions `r patterns_dom$max_pos[1]` (pattern `r patterns_dom$pattern[1]`) and `r patterns2$max_pos[1]` (pattern `r patterns2$pattern[1]`). There is some evidence that a 3-level predictor is not enough. For instance,
+above shows 4 other patterns with similar LODs. However, this begs the question of overfitting the data.
+
+#### Hunk1 as putative locus
+
+It is possible to consider `Hunk` as one of the loci. That will take a similar type of investigation.
+Simply putting a SNP near `Hunk` into the equation does not work well.
+
+```{r}
+wh <- qtl2::find_marker(qtl2:::snpinfo_to_map(snpprobs36_obj$snpinfo), "16", hunk)
+wh <- match(wh, names(snpmap))[1]
+domh <- geno36[[1]][,wh, drop=FALSE]
+dom_snp <- colnames(domh)
+data_snph <- data.frame(phe_df,domh,cov_df)
+data_snph[[dom_snp]] <- ordered(data_snph[[dom_snp]])
+fit_snph <- lm(formula(paste(pheno_name, "~",
+                            paste(names(data_snph)[-1], collapse = "+"))),
+               data_snph)
+anova(fit_snph)
+drop1(fit_snph, fit_snph, test="F")
+```
+```{r}
+
+```
+
+
+```{r}
+knitr::knit_exit()
+```
+
+Stepwise forward.
+
+```{r}
+fit_cov <- lm(formula(paste(phename, "~+", paste(covars, collapse="+"))),
+              data_snp)
+                      
+step_cov_snp <- step(fit_cov, direction="forward",
+     scope = formula(fit_snp), trace = 0)
+anova(step_cov_snp)                               
+drop1(step_cov_snp, step_cov_snp, test="F")
+```
+
+Stepwise model reduction. Again, little significance is lost.
+
+```{r}
+step_snp <- step(fit_snp, trace=0)
+anova(step_snp)
+drop1(step_snp, step_snp, test="F")
+anova(step_snp, fit_snp, test="F")
+```
+
+Summary of SNP analysis
+
+```{r}
+summary(step_snp)
+```
+
+### Consider Sex Interactions
+
+Start with model with covariates and best SNPs, then do forward selection with full model including sex interactions with all SNPs.
+
+```{r}
+fit_snp_sex <- lm(formula(paste(phename, "~",
+                            paste(names(data_snp)[-1], collapse = "+"),
+                            paste("+sex:(",paste(names(data_snp)[-seq_len(1 + length(covars))], collapse = "+")),
+                            ")")),
+               data_snp)
+```
+
+```{r}
+## Use trace = 1 to see steps.
+step_cov_snp_sex <- step(step_cov_snp, direction="forward",
+     scope = formula(fit_snp_sex), trace = 0)
+anova(step_cov_snp_sex)                               
+drop1(step_cov_snp_sex, step_cov_snp_sex, test="F")
+```
+
+There appear to be no gains by including interactions with sex.
+
+### Genome Scan adjusting for SNPs
+
+Adjusting for SNPs removes signal. Need more than one?
+
+```{r}
+addcov <- data_snp[,match(names(coef(step_cov_snp)),
+                          names(data_snp),
+                          nomatch=0)]
+snp_covar <- names(addcov)[-match(covars,names(addcov))]
+lmm_snp <- scan1(probs_obj, phe, K, addcov)
+plot(lmm, col="purple")
+plot(lmm_snp, add=TRUE, col=1)
+abline(v=c(max(lmm)$pos,max(lmm_snp)$pos), lty=2)
+for(i in snp_covar) {
+  lmm_snp <- scan1(probs_obj, phe, K, addcov[,-match(i,names(addcov)),drop=FALSE])
+  plot(lmm_snp, add=TRUE, col=2)
+  abline(v=max(lmm_snp)$pos, col=2, lty=3)
+  if(length(snp_covar) > 1) {
+    for(j in snp_covar[-match(i,snp_covar)]) {
+      tmp <- -match(c(i,j),names(addcov))
+      lmm_snp <- scan1(probs_obj, phe, K, addcov[,tmp,drop=FALSE])
+      plot(lmm_snp, add=TRUE, col=3)
+      abline(v=max(lmm_snp)$pos, lty=4, col=3)
+    }
+    if(length(snp_covar) > 2) {
+      for(k in snp_covar[-match(c(i,j), snp_covar)]) {
+        tmp <- -match(c(i,j,k),names(addcov))
+        lmm_snp <- scan1(probs_obj, phe, K, addcov[,tmp,drop=FALSE])
+        plot(lmm_snp, add=TRUE, col=4)
+        abline(v=max(lmm_snp)$pos, lty=5, col=4)
+      }
+    }
+  }
+}
+title(paste("genome scan of", phename, "adjusted for SNPs"))
+mtext("adjust for all SNPs(black) less 1(red), 2(green), 3(blue)")
+```
+
+Allele effects are pretty flat except for bizarre spikes.
+
+```{r}
+tmp <- scan1coef(probs_obj, phe, K, addcov)
+ylim <- range(tmp$coef[,-match(covars,dimnames(tmp$coef)[[2]])],
+              na.rm = TRUE)
+if(any(abs(ylim) > 10)) {
+  if(ylim[1] < -10)
+    ylim[1] <- -10
+  if(ylim[2] > 10)
+    ylim[2] <- 10
+}
+plot_coefCC(tmp, ylim=ylim)
+m <- match(patterns$max_snp, 
+           str_extract(names(addcov), "rs[0-9]+"),
+           nomatch = 0)
+abline(v=c(max(lmm)$pos,max(lmm_snp)$pos), lty=2)
+title(paste("haplotype allele for", phename, "adj for SNPs"))
+at <- par("usr")[1:2]
+col <- qtl2plot::CCcolors
+mtext(names(col), at=seq(at[1], at[2], length.out=8), col=col)
+```
+
+Test each SNP on its own.
+
+```{r}
+snp_names <- match(names(coef(step_cov_snp)),
+                          names(data_snp),
+                          nomatch=0)
+snp_names <- names(data_snp)[snp_names]
+snp_names <- snp_names[str_detect(snp_names, "[.]rs[0-9]")]
+max_snps <- list(none = max(lmm),
+                 all = max(lmm_snp))
+for(i in snp_names) {
+  addcov <- data_snp[,c(covars,i)]
+  max_snps[[i]] <- max(scan1(probs_obj, phe, K, addcov))
+}
+out <- bind_rows(max_snps, .id="SNP")
+
+m <- match(str_extract(out$SNP, "rs[0-9]+"),
+           patterns$max_snp, 
+           nomatch = 0)
+out$ABONZCPW <- ""
+out$ABONZCPW[m>0] <- patterns$AB1NZCPW[m]
+out
+```
+
+## Scan of Model Selected SNPs for Additive and Dominance 
+
+Here we collect significant patterns with best gene action,
+then collapse haplotypes and diplotypes in allele scan.
+
+### Additive SNPs in Reduced Model
+
+```{r}
+coef_snp <- coef(step_cov_snp)
+dom_snp <- names(coef_snp)[-match(c("(Intercept)",covars),
+                                  names(coef_snp))]
+add_snp <- dom_snp[str_detect(dom_snp, "add\\.")]
+dom_snp <- dom_snp[-match(add_snp, dom_snp)]
+add_snp <- str_extract(add_snp, "rs[0-9]+")
+dom_snp <- str_extract(dom_snp, "rs[0-9]+")
+```
+
+```{r}
+tmp <- patterns_max %>%
+  filter(max_snp %in% add_snp)
+if(nrow(tmp)) {
+  print(tmp)
+  plot_snpscan(probs36_obj, phe, K, covar,
+               tmp,
+               haplos, diplos)
+}
+```
+
+### Dominance SNPs in Reduced Model
+
+```{r}
+tmp <- patterns_max %>%
+  filter(max_snp %in% dom_snp)
+if(nrow(tmp)) {
+  print(tmp)
+  plot_snpscan(probs36_obj, phe, K, covar,
+               tmp,
+               haplos, diplos)
+}
+```
+
+## Phenotype by Genotype Plot
+
+Horizontal axis is expected number of B6 alleles, jittered for view.
+Blue line is quadratic fit, useful for detecting dominance.
+
+```{r}
+wh <- match(c(add_snp,dom_snp), names(snpprobs36_obj$map[[1]]))
+tmpfn <- function(x) 2 * jitter(x, 0.1, 0.02)
+adds <- as.data.frame(snpprobs_obj$probs[[1]][,2,wh,drop=FALSE]) %>%
+  mutate_all(tmpfn)
+names(adds) <- c(add_snp,dom_snp)
+data_fit <- bind_cols(data_snp %>%
+                         select(one_of(c(phename,covars))),
+                      adds) %>%
+  mutate(sex = factor(c("F","M")[1+sex]))
+phe_cov <- rep(NA, nrow(data_fit))
+phe_cov[!is.na(phe)] <- resid(fit_cov)
+data_fit$phe_cov <- phe_cov
+
+for(i in names(adds)) {
+  tmp <- patterns %>% 
+    filter(max_snp == i) %>% 
+    select(AB1NZCPW,contrast)
+  print(ggplot(data_fit, aes_(as.name(i), as.name("phe_cov"))) +
+          geom_point() + 
+          geom_smooth(method="lm", lty = "dashed", se=FALSE) + 
+          geom_smooth(method="lm", formula = y ~ x + I(x^2), se=FALSE) +
+          facet_wrap(~sex) +
+          ylab(paste(phename, "adj for covars")) +
+          xlab("copies of B6 allele") +
+          ggtitle(paste(i, tmp$AB1NZCPW[1], paste(tmp$contrast, collapse=","))))
+}
+for(i in names(adds)) {
+  tmp <- patterns %>% 
+    filter(max_snp == i) %>% 
+    select(AB1NZCPW,contrast)
+  print(ggplot(data_fit %>% mutate(Wave = wave), 
+               aes_(as.name(i), as.name("phe_cov"), col=as.name("Wave"))) +
+          geom_point() + 
+          geom_smooth(method="lm", lty = "dashed", se=FALSE) +
+          geom_smooth(method="lm", formula = y ~ x + I(x^2), se=FALSE) +
+          facet_wrap(~sex) +
+          ylab(paste(phename, "adj for covars")) +
+          xlab("copies of B6 allele") +
+          ggtitle(paste(i, tmp$AB1NZCPW[1], paste(tmp$contrast, collapse=","))))
+}
+```
+
+```{r}
+patterns %>%
+  filter(max_snp %in% c(add_snp,dom_snp))
+```

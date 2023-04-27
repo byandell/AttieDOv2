@@ -1,0 +1,12 @@
+.Rproj.user
+.Rhistory
+.Rdata
+.httr-oauth
+.DS_Store
+data
+*.html
+*.Rproj
+*.pdf
+*.rds
+*.csv
+

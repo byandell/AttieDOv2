@@ -1,0 +1,150 @@
+---
+title: "use SQLite"
+author: "Brian S Yandell"
+date: "September 9, 2016"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This document shows how to use the SQLite to drill in to genes in a particular chromosome region and a particular phenotype. Here is the region:
+
+```{r}
+chr_id <- "3"
+start_val <- 135
+end_val <- 145
+pheno_name <- "G8.3.AA_percent"
+```
+
+
+### Setup
+
+Attach libraries.
+
+```{r}
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(stringr)
+  library(d3heatmap)
+  library(ggplot2)
+})
+```
+
+Connect SQL database.
+
+```{r}
+my_sql_db <- src_sqlite("islet_mrna.sqlite")
+```
+
+```{r}
+my_sql_db
+```
+
+### Get ensembl information
+
+Here we get ensembl ID, gene name, etc., from chromosome 3 between 135 and 145 Mbp.
+Note that the `chr` must be quoted (as a character string) rather than a number.
+Some remarks:
+
+* The `()`s aroudn the assignment will print out the first few lines; not needed if you just want to save it.
+* The `%>%` are pipes to limit the data from the full 21,771 entries to the 60 in this interval.
+* The `collect` actually gets the data from the database so you can use it.
+
+```{r}
+(ensembl_info_3 <- tbl(my_sql_db, "ensembl_info") %>%
+  filter(chr == chr_id, start >= start_val, end <= end_val) %>%
+  collect)
+```
+
+### Get correlations in this interval.
+
+Use the collected interval information to get a set of correlations.
+Remember that you have to `collect` to actually get data for use.
+
+```{r}
+(islet_cors_3 <- tbl(my_sql_db, "islet_pheno_cors") %>%
+  filter(ensembl_id %in% ensembl_info_3$ensembl_id) %>%
+  collect)
+```
+
+#### D3 heatmap
+
+First change into data frame with `symbol.nnn` as row name, where `symbol` is the gene name (blank if not provided) and `nnn` is the numeric part of the ENSEMBL ID.
+
+```{r}
+islet_cors_3 <- data.frame(islet_cors_3)
+m <- match(islet_cors_3$ensembl_id, ensembl_info_3$ensembl_id)
+row.names(islet_cors_3) <- paste(ensembl_info_3$symbol[m],
+                                 str_replace(ensembl_info_3$ensembl_id,
+                                             "ENSMUSG0+", ""),
+                                 sep = ".")
+```
+
+```{r}
+d3heatmap(islet_cors_3[,-1])
+```
+
+### Get expression and phenotype data.
+
+#### Get just the `r pheno_name` phenotype.
+
+```{r}
+(pheno <- tbl(my_sql_db, "pheno") %>%
+  select_("mouse","sex","wave",pheno_name) %>%
+  collect)
+```
+
+Pick `ensemble_id`s extremes of corelation with `r pheno_name`.
+
+```{r}
+wh <- c(which.min(islet_cors_3[,pheno_name]),
+        which.max(islet_cors_3[,pheno_name]))
+(wh <- islet_cors_3[wh,"ensembl_id"])
+```
+
+Get expression data in this interval for these `ensembl_id`s.
+
+```{r}
+(islet_mrna_3 <- tbl(my_sql_db, "islet_mrna") %>%
+  filter(ensembl_id %in% wh) %>%
+  collect)
+```
+
+#### Plot phenotype against expression
+
+First join the data
+
+```{r}
+data <- full_join(pheno, islet_mrna_3) %>%
+  filter(!is.na(sex)) %>%
+  mutate(wave = factor(wave))
+```
+
+Since `pheno_name` is a variable, it is a bit tricky to include it in a plot. Here we create log10 of pheno as a new column
+
+```{r}
+data$log10_pheno <- log10(data[[pheno_name]])
+```
+
+Now plot data using `symbol` and `ensembl_id` in title.
+
+```{r}
+for(ens in wh) {
+  symbol <- (ensembl_info_3 %>%
+               filter(ensembl_id == ens))$symbol
+  print(ggplot(data %>% 
+                 filter(ensembl_id == ens),
+               aes(expr,log10_pheno,col=wave)) +
+          geom_point() +
+          geom_smooth(method = "lm", se = FALSE) +
+          facet_wrap(~sex) +
+          ylab(paste("log10 of pheno_name")) +
+          ggtitle(paste(symbol, ens)))
+}
+```
+

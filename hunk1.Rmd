@@ -1,0 +1,327 @@
+---
+title: "Hunk1 Workflow"
+params:
+  chr_id: '16'
+  peak_Mbp: 89
+  pheno_names: GLP1_G83_ins_secrete
+  window_Mbp: 5
+  snp_action: "add+dom"
+  datapath: "~/Documents/Research/qtl2shiny/qtl2shinyData"
+output:
+  html_document: default
+  html_notebook: default
+---
+
+This is not exactly the document I want. There was a place where I tried out various 2-QTL models for GLP1.
+
+This document describes in detail the haplotype workflow using the `R/qtl2ggplot` package, which is a package that builds on the `R/qtl2` suite and earlier work on `R/DOQTL`. All but the data setup routines have been migrated from `R/doqtl2` to `R/qtl2ggplot` and `R/qtl2pattern`. The routines cited below are used in the `R/qtl2shiny` package, which is basically a [Shiny](http://shiny.rstudio.com) wrapper.
+
+Workflow proceeds as follows:
+
+* set up data
+* get haplotype genotype probabilities and kinship matrix
+* allele-based scan of chromosome (LOD and effects)
+* get SNP 2-level genotype probabilities
+* do SNP association scan
+* examine SNP allele patterns
+* examine diplotypes
+* scan top pattern contrasts for LOD and SNP alleles
+
+## Setup
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=8, 
+                      #fig.path='Figs/',
+                      echo=TRUE, warning=FALSE, message=FALSE,
+                      comment="")
+```
+
+AA_G83_ins_secrete,G33_ins_secrete,G83_ins_secrete,G167_ins_secrete,KCl_G33_ins_secrete,GLP1_G83_ins_secrete,PA_G167_ins_secret
+
+```{r child="setup.Rmd"}
+```
+
+Genome scan1 (`qtl2::scan1`).
+
+```{r}
+scan_obj <- qtl2::scan1(subset(probs_obj, chr = chr_id), 
+                  phe_df, K_chr[[chr_id]],  addcovar)
+```
+
+```{r}
+(sum_obj <- qtl2::find_peaks(scan_obj, pmap[chr_id]))
+```
+
+```{r}
+ggplot2::autoplot(scan_obj, pmap[chr_id]) +
+  ggplot2::geom_vline(xintercept = sum_obj$pos, linetype = 2)
+```
+
+#### List of scan1coef objects
+
+```{r}
+eff_obj <- qtl2::scan1coef(probs_obj[,chr_id], phe_df, 
+                                        K_chr[[chr_id]], addcovar)
+```
+
+```{r}
+summary(eff_obj, scan_obj, pmap[chr_id])
+```
+```{r}
+ggplot2::autoplot(eff_obj, pmap[chr_id]) +
+  ggplot2::geom_vline(xintercept = sum_obj$pos, linetype = 2)
+```
+
+#### SNP Association Scan
+
+SNP genotype probabilities based on haplotype genotype probabilites have two levels, with level 0 being the proportion of reference (B6) SNP alleles and 1 being the proportion of non-reference SNP alleles.
+
+`qtl2pattern::get_snpprobs` is a wrapper for `qtl2::genoprob_to_snpprob` that gets SNPs in chr region using objects in `datapath`. See table above for needed files for SNPs, InDels and other structural variants. These files are created in scripts found in `system.file("inst/derived_data", package = "doqtl2")`. See, respectively, files `vcf_snp_2db.R`, `vcf_indel_2db.R` and `svs.Rmd`.
+
+```{r}
+query_variants <- 
+  qtl2::create_variant_query_func(
+    file.path(project_info$directory, project_info$taxa, "cc_variants.sqlite"))
+snpinfo <- query_variants(chr_id, scan_window[1], scan_window[2])
+```
+
+```{r}
+snpprobs_obj <- qtl2pattern::get_snpprobs(chr_id, 
+                   peak_Mbp, 
+                   window_Mbp,
+                   pheno_names, 
+                   probs_obj,
+                   pmap[chr_id],
+                   snpinfo = snpinfo)
+snpinfo <- snpprobs_obj$snpinfo
+snpprobs_obj <- snpprobs_obj$snpprobs
+```
+
+Scan1 of `calc_genoprobs` object for SNPs. The object `snpprobs_obj` includes an element `snpinfo`, which containt the additional SNPs (and InDels and structural variants) with `index` to match with genotyped SNPs for imputation.
+
+```{r}
+snp_scan_obj <- qtl2::scan1(snpprobs_obj,
+                      phe_df, K_chr[[chr_id]], addcovar)
+```
+
+```{r}
+ggplot2::autoplot(snp_scan_obj, snpinfo)
+```
+
+```{r}
+drop_hilit <- min(1.5, max(unclass(snp_scan_obj)) - 3)
+```
+
+```{r}
+ggplot2::autoplot(snp_scan_obj, snpinfo,
+             show_all_snps = FALSE,
+             drop_hilit = drop_hilit,
+             xlim = snp_scan_window,
+             main = pheno_name)
+```
+
+#### SNP Allele Patterns
+
+Use generic plot from R/qtl2ggplot, which is the preferred way forward. 
+
+```{r}
+plot(snp_scan_obj, snpinfo,
+     show_all_snps = TRUE,
+     drop.hilit = drop_hilit,
+     cex = 2,
+     xlim = snp_scan_window,
+     main = pheno_name,
+     patterns = "hilit")
+```
+
+```{r}
+plot(snp_scan_obj, snpinfo, 1:6,
+     show_all_snps = TRUE,
+     drop.hilit = drop_hilit,
+     xlim = snp_scan_window,
+     main = pheno_name,
+     patterns = "hilit",
+     facet = "pheno")
+```
+
+```{r}
+plot(snp_scan_obj, snpinfo, 1:6,
+     show_all_snps = TRUE,
+     drop.hilit = drop_hilit,
+     xlim = snp_scan_window,
+     main = pheno_name,
+     patterns = "hilit",
+     facet = "pattern")
+```
+
+
+```{r}
+top_a <- qtl2pattern::top_snps_all(snp_scan_obj, snpinfo)
+```
+
+```{r}
+dplyr::select(summary(top_a),
+              -min_lod, -sdp, -max_snp)
+```
+
+## Diplotypes
+
+Read genotype probability object across 36 CC founder allele pairs for chr `r chr_id`.
+Can be single chromosome or whole genome. `DOread::read_probs36` reads probs for one chromosome only. See `qtl2::calc_genoprob`.
+
+```{r}
+probs36_obj <- DOread::read_probs36(chr_id, 
+                            scan_window[1],
+                            scan_window[2],
+                            datapath)
+map36 <- probs36_obj$map
+probs36_obj <- probs36_obj$probs
+```
+
+SNP genotype probabilities based on diplotype genotype probabilites have three levels, with level $s$ being the proportion with $s$ copies of non-reference (non-B6) SNP alleles.
+
+`qtl2pattern::get_snpprobs` is a wrapper for `qtl2::genoprob_to_snpprob` that gets SNPs in chr region using objects in `datapath`. See table above for needed files for SNPs, InDels and other structural variants. These files are created in scripts found in `system.file("inst/derived_data", package = "doqtl2")`. See, respectively, files `vcf_snp_2db.R`,  `vcf_indel_2db.R` and `svs.Rmd`.
+
+```{r}
+snpprobs36_obj <- qtl2pattern::get_snpprobs(chr_id, 
+                               peak_Mbp, 
+                               window_Mbp,
+                               pheno_names, 
+                               probs36_obj,
+                               map36,
+                               datapath)
+snpinfo36 <- snpprobs36_obj$snpinfo
+snpprobs36_obj <- snpprobs36_obj$snpprobs
+```
+
+Scan1 of `calc_genoprobs` object for SNPs. The object `snpprobs_obj` includes an element `snpinfo`, which containt the additional SNPs (and InDels and structural variants) with `index` to match with genotyped SNPs for imputation. 
+
+From here forward, analysis depends on `snp_action`, which is a type of contrast among the 36 diplotype levels. `qtl2pattern::snpprob_collapse` collapses the 36 diplotype probabilities to 2 or 3 levels based on the type of contrast:
+
+contrast | detail
+------|-------
+`add+dom` | additive and dominance (general)
+`additive` | additive only (almost same as basic haplotype)
+`non-add`  | deviation from additive for heterozygotes
+`dominant` | reference (B6) is dominant
+`recessive` | reference (B6) is recessive
+
+```{r}
+snp_scan36_obj <- qtl2::scan1(qtl2pattern::snpprob_collapse(snpprobs36_obj,
+                                         snp_action), 
+                        phe_df, K_chr[[chr_id]], cov_df)
+```
+
+`qtl2pattern:::summary.scan1` is temporary summary function for `scan1` object with multiple phenotypes, until `R/qtl2` has such a function.
+
+```{r}
+summary(snp_scan36_obj, map36, snpinfo36)
+```
+
+```{r}
+drop.hilit36 <- min(1.5, max(unclass(snp_scan36_obj)) - 3)
+```
+
+```{r}
+plot(snp_scan36_obj, snpinfo36,
+             show_all_snps = FALSE,
+             drop.hilit = drop.hilit36,
+             xlim = scan_window,
+             main = pheno_names[1])
+```
+
+
+```{r}
+plot(snp_scan36_obj, snpinfo36, 1:6,
+             show_all_snps = FALSE,
+             drop.hilit = drop.hilit36,
+             xlim = scan_window,
+     facet = "pheno")
+```
+
+```{r}
+plot(snp_scan36_obj, snpinfo36, 1:6,
+     show_all_snps = TRUE,
+     drop.hilit = drop.hilit36,
+     xlim = snp_scan_window,
+     main = pheno_name,
+     patterns = "hilit",
+     facet = "pheno")
+```
+
+
+```{r}
+plot(snp_scan36_obj, snpinfo36, 1:6,
+     show_all_snps = TRUE,
+     drop.hilit = drop.hilit36,
+     xlim = snp_scan_window,
+     main = pheno_name,
+     patterns = "hilit",
+     facet = "pattern")
+```
+
+#### Diplo SNP Allele Patterns & LODs
+
+```{r}
+top_snps36_tbl <- qtl2pattern::top_snps_all(snp_scan36_obj, snpinfo36)
+```
+
+```{r}
+summary(top_snps36_tbl)
+```
+
+```{r}
+(patterns <- dplyr::arrange(
+  dplyr::mutate(
+    summary(top_snps36_tbl),
+    contrast = snp_action,
+    max_snp = ""),
+  dplyr::desc(max_lod)))
+```
+
+Now want to use `qtl2pattern::scan_pattern` to look at SNP patterns over region for phenotypes. Currently, that routine is written for one phenotype. Expand to multiple phenotypes.
+
+Following is only set up for one phenotype. Not sure why. See `qtl2pattern::scan_pattern.R` lines 45-50.
+
+```{r}
+scan_pat <- 
+  qtl2pattern::scan_pattern(probs36_obj, phe_df[, pheno_name, drop=FALSE],
+               K_chr[[chr_id]], cov_df, map36,
+               dplyr::filter(patterns, pheno == pheno_name))
+```
+
+Pick best pattern to plot. Could at this point, could use any of the patterns.
+
+```{r}
+summary(scan_pat, map36)
+```
+
+```{r}
+plot(scan_pat, map36, "lod")
+```
+
+```{r}
+plot(scan_pat, map36, "coef")
+```
+
+### Produce plot
+
+```{r}
+(pattern <- qtl2pattern::sdp_to_pattern(patterns$sdp)[1])
+```
+
+```{r}
+(pattern_best <- 
+  (dplyr::filter(scan_pat$patterns, 
+                   qtl2pattern::sdp_to_pattern(sdp) == pattern))$founders)
+```
+
+```{r}
+plot(scan_pat, map36, "coef", pattern_best) +
+  ggplot2::ggtitle(pheno_name)
+```
+
+```{r}
+plot(scan_pat, map36, "lod", pattern_best) +
+  ggplot2::ggtitle(pheno_name)
+```

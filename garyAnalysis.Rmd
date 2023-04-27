@@ -1,0 +1,63 @@
+---
+title: "GaryAnalysis"
+author: "Brian S. Yandell"
+date: "12/19/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE}
+library(dplyr)
+library(qtl2)
+library(qtl2feather)
+library(qtl2pattern)
+library(stringr)
+library(purrr)
+```
+
+```{r}
+gary_anal <- system("grep '^# Phenotype' QTLmaps/Script.R", intern = TRUE) %>%
+  str_replace("= ", "") %>%
+  str_split("[:|,] +") %>%
+  map(function(x) data.frame(t(x), stringsAsFactors = FALSE)) %>%
+  bind_rows %>%
+  rename(short = X2,
+         transf = X4,
+         covar = X6) %>%
+  select(short, transf, covar)
+```
+
+Need to get translation of names. First modified Script.R to have one rename per line.
+
+
+```{r}
+renames <- system("sed -n -e '/^  rename/,/^names/{ /^names/d; p; }' QTLmaps/Script.R | sed 's/rename.//' | sed s/,$// | sed 's/ = /,/' | sed 's/ *//'", intern = TRUE)
+renames <- str_split(renames, ",") %>%
+  map(function(x) x[1:2]) %>%
+  as.data.frame %>%
+  t %>%
+  as.data.frame(stringsAsFactors = FALSE)
+ colnames(renames) <- c("short", "pheno")
+ rownames(renames) <- NULL
+ renames
+```
+
+```{r}
+gary_anal$pheno <- gary_anal$short
+m <- match(renames$short, gary_anal$short, nomatch = 0)
+gary_anal$pheno[m] <- renames$pheno[m>0]
+gary_anal
+```
+
+```{r}
+(gary_anal <- gary_anal %>%
+  mutate(covar = ifelse(covar %in% c("None","None."), "", covar),
+         covar = str_replace(covar, " \\+ ", ",")) %>%
+  mutate(transf = ifelse(transf == "sqrt transform", "sqrt", transf)))
+```
+
+Now need to add entries to `analyses_tbl` for additional covariates?
+But I am not convinced that they actually work as desired.

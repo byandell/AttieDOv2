@@ -1,0 +1,183 @@
+
+### Library and Parameters
+
+```{r message=FALSE}
+suppressPackageStartupMessages({
+  library(qtl2)
+  library(qtl2ggplot)
+  library(qtl2pattern)
+  library(qtl2shiny)
+  library(qtl2feather)
+  library(dplyr)
+})
+```
+
+Paramaters set up front.
+
+```{r}
+pheno_names <- unlist(stringr::str_split(params$pheno_names, ",")[[1]])
+chr_id  <- as.character(params$chr_id)
+peak_Mbp <- as.numeric(params$peak_Mbp)
+window_Mbp <- as.numeric(params$window_Mbp)
+snp_action <- as.character(params$snp_action)
+datapath <- as.character(params$datapath)
+```
+
+While some of these tools allow for analyzing multiple phenotypes, we focus here on one phenotype.
+
+```{r}
+pheno_name <- pheno_names[1]
+```
+
+Scan windows used for plotting. `scan_window` is for subset of whole chromosome;
+`snp_scan_window` is for further subsetting within this window for SNP study
+(here use default of whole `scan_window`).
+
+```{r}
+scan_window <- peak_Mbp + 
+  c(-1,1) * window_Mbp
+snp_scan_window <- scan_window
+```
+
+parameter     | value | description
+--------------|-------|------------
+`pheno_names` | `r pheno_names` | phenotype names
+`chr_id`      | `r chr_id` | chromosome name
+`peak_Mbp`    | `r peak_Mbp` | peak location (Mbp)
+`window_Mbp`  | `r window_Mbp` | window half-width (Mbp)
+`scan_window` | `c(`r paste(scan_window, collapse = ",")`)` | scan window (Mbp)
+`snp_scan_window` | c(`r paste(snp_scan_window, collapse = ",")`) | SNP scan window (Mbp)
+`datapath`    | `r datapath` | path to DerivedData folder
+
+You can change parameters in external call by running the following script:
+
+```{r eval=FALSE}
+params_val <- rmarkdown::knit_params_ask("haplo_steps.Rmd")
+rmarkdown::render("haplo_steps.Rmd.Rmd",
+                  params=params_val)
+```
+
+### Phenotypes and Covariates
+
+Set up data files. This has dataset specific information.
+Note filtering to smaller subsets below.
+
+R object       | description
+---------------|------------
+`project_info` | project info
+`analyses_tbl` | table of analysis settings from Karl
+`peaks`        | table of previously computed LOD peaks from Karl
+`pheno_data`   | table of phenotype data
+`pheno_type`   | vector of phenotype data types
+`covar`        | matrix of covariates
+
+```{r}
+(project_info <- read.csv(file.path(datapath, "..", "projects.csv")) %>%
+   mutate(directory = datapath) %>%
+   filter(project == "AttieDOv2"))
+```
+
+```{r}
+covar <- qtl2shiny::read_project_rds(project_info, "covar")
+```
+
+Filter peaks and analyses_tbl to "best" analysis (may be called `anal1` or `anal2`).
+
+```{r}
+peaks <- qtl2shiny::read_project_rds(project_info, "peaks")
+peak_info <- (
+  dplyr::ungroup(
+    dplyr::summarize(
+      dplyr::arrange(
+        dplyr::distinct(
+          dplyr::group_by(peaks, pheno), 
+          output), 
+        dplyr::desc(output)), 
+      output = output[1])
+    )
+  )$output
+peaks <- dplyr::filter(peaks, output %in% peak_info)
+```
+
+```{r}
+analyses_tbl <- dplyr::filter(qtl2shiny::read_project_rds(project_info, "analyses"), 
+                              output %in% peak_info)
+```
+
+```{r}
+peak_info <- peaks$pheno
+pheno_data <- qtl2shiny::read_project_rds(project_info, "pheno_data")
+pheno_data <- dplyr::select(pheno_data, 
+                            which(names(pheno_data) %in% peak_info))
+rm(peak_info)
+```
+
+```{r}
+pheno_type <- c("all", sort(unique(analyses_tbl$pheno_type)))
+```
+
+#### Specific phenotypes for this workflow
+
+Filter analyses table and get phenotypes and covariate objects. Do appropriate transformations on phenotypes as needed.
+
+```{r}
+analyses_df <- dplyr::filter(analyses_tbl, pheno %in% pheno_names)
+```
+
+```{r}
+phe_df <- DOread::get_pheno(pheno_data,
+                            dplyr::distinct(analyses_df, 
+                                            pheno, .keep_all=TRUE))
+cov_df <- DOread::get_covar(covar, analyses_df)
+```
+
+### Genotype probabilities and genome features
+
+In addition, the following objects are read during workflow. They are in the `DerivedData` folder. See specific functions for how they are read.
+
+R object     | description
+-------------|------------
+`K_chr`            | list of kinship matrices
+`probs.rds` or ``r paste0("probs_", chr_id, ".rds")``  | calc_genoprob object for whole genome or chr `r chr_id`
+`pmap`       | physical map
+`ccfounderssnps.sqlite` | SQLite database of Sanger SNPs
+`ccfoundersindels.sqlite` | SQLite database of Sanger InDels
+`svs8_len.rds` | table of Sanger structural variants (INS, DEL, INV)
+`mgi_db.sqlite` | SQLite database of Sanger features (genes, exons)
+
+## Genome scan
+
+Read kinship matrix. Can be single chromosome or list for whole genome.
+
+```{r}
+K_chr <- qtl2shiny::read_project_rds(project_info, "kinship")
+```
+
+Read genotype probability object across 8 CC founder alleles for chr `r chr_id`.
+Can be single chromosome or whole genome. `DOread::read_probs` reads probs for one or more chromosomes, or all chromosomes. See `qtl2::calc_genoprob`.
+
+```{r}
+query_probs <- 
+  DOread::create_probs_query_func_do(
+    file.path(project_info$directory, project_info$taxa, project_info$project))
+probs_obj <- query_probs(chr_id, scan_window[1], scan_window[2])
+```
+
+Physical map.
+
+```{r}
+pmap <- probs_obj$map
+probs_obj <- probs_obj$probs
+```
+
+Additive covariates
+
+```{r}
+f <- formula(paste("~", paste(names(cov_df), collapse = "+")))
+addcovar <- model.matrix(f, cov_df)[,-1, drop = FALSE]
+```
+
+```{r}
+
+```
+

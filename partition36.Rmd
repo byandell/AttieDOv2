@@ -1,0 +1,443 @@
+
+```{r}
+knitr::opts_chunk$set(echo = FALSE, comment = "")
+```
+
+```{r }
+suppressPackageStartupMessages({
+  library(doqtl2)
+  library(stringr)
+})
+```
+
+```{r}
+dirpath <- file.path("~/Documents/Research/attie_alan/DO", "data")
+datapath <- file.path(dirpath, "DerivedData")
+```
+
+This document relates the 8 haplotypes to the 36 diplotypes and to 2- or 3-level SNP genotypes. Basically, the 36 diplotypes are collapsed into 8 haplotypes by adding up genotype probabilities across allele pairs for each allele. In fact, the diplotypes were originally imputed from the 3-level SNPs on the SNP chip. If SNPs have additive effects on a phenotype, then one need only consider the haplotypes and map them to 2-level SNPs. However, for more general gene action (or SNP action), the diplotypes and 3-level SNPs need to be examined.
+
+We can identify the gene action of a SNP by looking at its 3-level version, which is derived from the 36 diplotypes. That is, what is the relationship of phenotype mean to the number of copies of the non-B allele of a SNP?
+This is developed below in the example.
+
+## Traditional Genome and Allele Scan
+
+```{r}
+covar <- get_traits(phename_filter, phename_drop, analysis_type,
+                    transform=TRUE,
+                    datapath=datapath)
+phename_output <- covar$output
+phe <- covar$phe
+phename <- names(phe)
+if(!exists("shorten_char"))
+  shorten_char <- 0
+shortname <- shorten_phename(phename, shorten_char)
+names(phe) <- shortname
+phename <- shortname
+covar <- covar$covar
+covars <- dimnames(covar)[[2]]
+```
+
+```{r}
+wave <- readRDS(file.path(datapath, "covar.rds"))
+wave <- wave[,str_detect(dimnames(wave)[[2]], "wave")]
+wave <- factor(1 + apply(t(wave) * (1:3), 2, sum))
+```
+
+```{r}
+if(!exists("window_Mbp"))
+  window_Mbp <- 5
+start_val <- peak_Mbp - window_Mbp
+end_val <- peak_Mbp + window_Mbp
+```
+
+```{r}
+## Get genotype (diplotype) probabilities. 
+probs1 <- read_probs36(chr_id, start_val, end_val,
+                       file.path(datapath, "wave4", "DOQTL"))
+## Create haplotype probabilities from these.
+probsa <- genoprob_to_alleleprob(probs1)
+K <- readRDS(file.path(datapath, "kinship.rds"))[chr_id]
+```
+
+```{r}
+founders <- str_split("AB1NZCPW","")[[1]]
+haplos <- dimnames(probsa$probs[[1]])[[2]]
+diplos <- dimnames(probs1$probs[[1]])[[2]]
+names(founders) <- haplos
+diplos <- str_replace_all(diplos, founders)
+haplos <- str_replace_all(haplos, founders)
+dimnames(probsa$probs[[1]])[[2]] <- haplos
+dimnames(probs1$probs[[1]])[[2]] <- diplos
+```
+
+We focus on the `r phename` phenotype for insulin secretion and the peak on chr `r chr_id` at `r peak_Mbp``Mbp`. Here is the genome scan and the haplotype allele scan.
+
+```{r}
+lmm <- scan1(probsa, phe, K, covar)
+tmp <- phe
+tmp[wave==4,1] <- NA
+tmp <- scan1(probsa, tmp, K, covar)
+plot(lmm, ylim=c(0,max(max(tmp)[3],max(lmm)[3])))
+plot(tmp, add=TRUE, col="black")
+abline(v=c(max(lmm)$pos, max(tmp)$pos), lty=2)
+title(paste("genome scan of", phename))
+mtext("blue=wave4, black=wave3")
+```
+
+```{r}
+plot_coefCC(scan1coef(probsa, phe, K, covar))
+abline(v=c(max(lmm)$pos, max(tmp)$pos), lty=2)
+title(paste("haplotype allele scan of", phename))
+at <- par("usr")[1:2]
+col <- qtl2plot::CCcolors
+mtext(names(col), at=seq(at[1], at[2], length.out=8), col=col)
+```
+
+Here is the SNP scan using the 2-level additive SNPs.
+
+```{r}
+## additive
+snpprobsa <- get_snpprobs(chr_id, peak_Mbp, window_Mbp,
+                         phename, probsa, datapath = datapath)
+lmma <- scan1(snpprobsa, phe, K, covar)
+patterna <- plot_snp_pattern(lmma, "additive")
+```
+
+## 3-Level SNP Tests
+
+```{r}
+snpprobs1 <- get_snpprobs(chr_id, peak_Mbp, window_Mbp,
+                         phename, probs1, datapath = datapath)
+```
+
+Here is a scan using the 3-level diploid SNPs.
+
+```{r}
+## additive + dominance
+lmm1 <- scan1(snpprobs1, phe, K, covar)
+pattern1 <- plot_snp_pattern(lmm1, "additive & dominace")
+```
+
+Here are scans for various dominance contrasts. Different patterns emerge from these.
+
+```{r}
+## B6 recessive
+lmmbr <- scan1(snpprob_collapse(snpprobs1, "B6-recessive"), phe, K, covar)
+patternbr <- plot_snp_pattern(lmmbr, "B6 recessive")
+## B6 dominant
+lmmbd <- scan1(snpprob_collapse(snpprobs1, "B6-dominance"), 
+              phe, K, covar)
+patternbd <- plot_snp_pattern(lmmbd, "B6 dominance")
+## dominance
+lmmd <- scan1(snpprob_collapse(snpprobs1, "dominance"), 
+              phe, K, covar)
+patternd <- plot_snp_pattern(lmmd, "dominance")
+```
+
+## Top SNPs for Additive and Dominance 
+
+Below, we collect best patterns with best gene action,
+then organize into pattern list to collapse 36 into subset.
+
+```{r}
+(patterns <- bind_rows(add=patterna,
+                       dom=patternd,
+                       b6r=patternbr,
+                       b6d=patternbd,
+                       .id="contrast") %>%
+   tbl_df %>%
+   arrange(desc(max_lod)))
+```
+
+### Additive SNPs
+
+Examine SNPs with additive most significant effect.
+
+```{r}
+patterns_max <- patterns %>%
+  group_by(pheno,AB1NZCPW,max_snp,max_pos) %>%
+  summarize(contrast = paste(contrast, collapse=","),
+            max_lod = max(max_lod)) %>%
+  ungroup %>%
+  arrange(desc(max_lod))
+tmp <- patterns_max %>%
+  filter(contrast == "add")
+if(nrow(tmp)) {
+  print(tmp)
+  plot_snpscan(probs1, phe, K, covar,
+               tmp,
+               haplos, diplos)
+}
+```
+
+### Dominance SNPs
+
+Examine SNPs with dominance as most significant effect.
+
+```{r}
+tmp <- patterns_max %>%
+  filter(contrast != "add")
+if(nrow(tmp)) {
+  print(tmp)
+  plot_snpscan(probs1, phe, K, covar,
+               tmp,
+               haplos, diplos)
+}
+```
+
+## Analysis
+
+This is a very beginning of analysis. The first "traditional" analysis (`trad`) uses the haplotypes at the best genome scan position. The second "SNP" analysis (`snp`) uses SNPs identified from additive and dominance effects.
+
+Both analyses are highly significant if viewed as F tests on their own; both explain about 30% of the variation.
+
+#### SNP Analysis
+
+```{r}
+wh <- match(patterns$max_snp, names(snpprobs1$map[[1]]))
+cont <- patterns$contrast
+adds <- snpprobsa$probs[[1]][,2,wh[cont=="add"],drop=FALSE]
+doms <- snpprobs1$probs[[1]][,2,wh[cont=="dom"],drop=FALSE]
+b6rs <- 1 - snpprobs1$probs[[1]][,1,wh[cont=="b6r"],drop=FALSE]
+b6ds <- 1 - snpprobs1$probs[[1]][,3,wh[cont=="b6d"],drop=FALSE]
+data_snp <- cbind(phe,covar,adds,doms,b6rs,b6ds)
+names(data_snp) <- str_replace_all(names(data_snp),
+                               c("^B\\." = "add.", 
+                                 "^AB\\." = "dom.",
+                                 "^AA\\." = "b6r.",
+                                 "^BB\\." = "b6d."))
+fit_snp <- lm(formula(paste(phename, "~",
+                            paste(names(data_snp)[-1], collapse = "+"))),
+               data_snp)
+#anova(fit_snp)
+#drop1(fit_snp, fit_snp, test="F")
+```
+
+Stepwise forward.
+
+```{r}
+fit_cov <- lm(formula(paste(phename, "~+", paste(covars, collapse="+"))),
+              data_snp)
+                      
+step_cov_snp <- step(fit_cov, direction="forward",
+     scope = formula(fit_snp), trace = 0)
+anova(step_cov_snp)                               
+drop1(step_cov_snp, step_cov_snp, test="F")
+```
+
+Stepwise model reduction. Again, little significance is lost.
+
+```{r}
+step_snp <- step(fit_snp, trace=0)
+anova(step_snp)
+drop1(step_snp, step_snp, test="F")
+anova(step_snp, fit_snp, test="F")
+```
+
+Summary of SNP analysis
+
+```{r}
+summary(step_snp)
+```
+
+### Consider Sex Interactions
+
+Start with model with covariates and best SNPs, then do forward selection with full model including sex interactions with all SNPs.
+
+```{r}
+fit_snp_sex <- lm(formula(paste(phename, "~",
+                            paste(names(data_snp)[-1], collapse = "+"),
+                            paste("+sex:(",paste(names(data_snp)[-seq_len(1 + length(covars))], collapse = "+")),
+                            ")")),
+               data_snp)
+```
+
+```{r}
+## Use trace = 1 to see steps.
+step_cov_snp_sex <- step(step_cov_snp, direction="forward",
+     scope = formula(fit_snp_sex), trace = 0)
+anova(step_cov_snp_sex)                               
+drop1(step_cov_snp_sex, step_cov_snp_sex, test="F")
+```
+
+There appear to be no gains by including interactions with sex.
+
+### Genome Scan adjusting for SNPs
+
+Adjusting for SNPs removes signal. Need more than one?
+
+```{r}
+addcov <- data_snp[,match(names(coef(step_cov_snp)),
+                          names(data_snp),
+                          nomatch=0)]
+snp_covar <- names(addcov)[-match(covars,names(addcov))]
+lmm_snp <- scan1(probsa, phe, K, addcov)
+plot(lmm, col="purple")
+plot(lmm_snp, add=TRUE, col=1)
+abline(v=c(max(lmm)$pos,max(lmm_snp)$pos), lty=2)
+for(i in snp_covar) {
+  lmm_snp <- scan1(probsa, phe, K, addcov[,-match(i,names(addcov)),drop=FALSE])
+  plot(lmm_snp, add=TRUE, col=2)
+  abline(v=max(lmm_snp)$pos, col=2, lty=3)
+  if(length(snp_covar) > 1) {
+    for(j in snp_covar[-match(i,snp_covar)]) {
+      tmp <- -match(c(i,j),names(addcov))
+      lmm_snp <- scan1(probsa, phe, K, addcov[,tmp,drop=FALSE])
+      plot(lmm_snp, add=TRUE, col=3)
+      abline(v=max(lmm_snp)$pos, lty=4, col=3)
+    }
+    if(length(snp_covar) > 2) {
+      for(k in snp_covar[-match(c(i,j), snp_covar)]) {
+        tmp <- -match(c(i,j,k),names(addcov))
+        lmm_snp <- scan1(probsa, phe, K, addcov[,tmp,drop=FALSE])
+        plot(lmm_snp, add=TRUE, col=4)
+        abline(v=max(lmm_snp)$pos, lty=5, col=4)
+      }
+    }
+  }
+}
+title(paste("genome scan of", phename, "adjusted for SNPs"))
+mtext("adjust for all SNPs(black) less 1(red), 2(green), 3(blue)")
+```
+
+Allele effects are pretty flat except for bizarre spikes.
+
+```{r}
+tmp <- scan1coef(probsa, phe, K, addcov)
+ylim <- range(tmp$coef[,-match(covars,dimnames(tmp$coef)[[2]])],
+              na.rm = TRUE)
+if(any(abs(ylim) > 10)) {
+  if(ylim[1] < -10)
+    ylim[1] <- -10
+  if(ylim[2] > 10)
+    ylim[2] <- 10
+}
+plot_coefCC(tmp, ylim=ylim)
+m <- match(patterns$max_snp, 
+           str_extract(names(addcov), "rs[0-9]+"),
+           nomatch = 0)
+abline(v=c(max(lmm)$pos,max(lmm_snp)$pos), lty=2)
+title(paste("haplotype allele for", phename, "adj for SNPs"))
+at <- par("usr")[1:2]
+col <- qtl2plot::CCcolors
+mtext(names(col), at=seq(at[1], at[2], length.out=8), col=col)
+```
+
+Test each SNP on its own.
+
+```{r}
+snp_names <- match(names(coef(step_cov_snp)),
+                          names(data_snp),
+                          nomatch=0)
+snp_names <- names(data_snp)[snp_names]
+snp_names <- snp_names[str_detect(snp_names, "[.]rs[0-9]")]
+max_snps <- list(none = max(lmm),
+                 all = max(lmm_snp))
+for(i in snp_names) {
+  addcov <- data_snp[,c(covars,i)]
+  max_snps[[i]] <- max(scan1(probsa, phe, K, addcov))
+}
+out <- bind_rows(max_snps, .id="SNP")
+
+m <- match(str_extract(out$SNP, "rs[0-9]+"),
+           patterns$max_snp, 
+           nomatch = 0)
+out$ABONZCPW <- ""
+out$ABONZCPW[m>0] <- patterns$AB1NZCPW[m]
+out
+```
+
+## Scan of Model Selected SNPs for Additive and Dominance 
+
+Here we collect significant patterns with best gene action,
+then collapse haplotypes and diplotypes in allele scan.
+
+### Additive SNPs in Reduced Model
+
+```{r}
+coef_snp <- coef(step_cov_snp)
+dom_snp <- names(coef_snp)[-match(c("(Intercept)",covars),
+                                  names(coef_snp))]
+add_snp <- dom_snp[str_detect(dom_snp, "add\\.")]
+dom_snp <- dom_snp[-match(add_snp, dom_snp)]
+add_snp <- str_extract(add_snp, "rs[0-9]+")
+dom_snp <- str_extract(dom_snp, "rs[0-9]+")
+```
+
+```{r}
+tmp <- patterns_max %>%
+  filter(max_snp %in% add_snp)
+if(nrow(tmp)) {
+  print(tmp)
+  plot_snpscan(probs1, phe, K, covar,
+               tmp,
+               haplos, diplos)
+}
+```
+
+### Dominance SNPs in Reduced Model
+
+```{r}
+tmp <- patterns_max %>%
+  filter(max_snp %in% dom_snp)
+if(nrow(tmp)) {
+  print(tmp)
+  plot_snpscan(probs1, phe, K, covar,
+               tmp,
+               haplos, diplos)
+}
+```
+
+## Phenotype by Genotype Plot
+
+Horizontal axis is expected number of B6 alleles, jittered for view.
+Blue line is quadratic fit, useful for detecting dominance.
+
+```{r}
+wh <- match(c(add_snp,dom_snp), names(snpprobs1$map[[1]]))
+tmpfn <- function(x) 2 * jitter(x, 0.1, 0.02)
+adds <- as.data.frame(snpprobsa$probs[[1]][,2,wh,drop=FALSE]) %>%
+  mutate_all(tmpfn)
+names(adds) <- c(add_snp,dom_snp)
+data_fit <- bind_cols(data_snp %>%
+                         select(one_of(c(phename,covars))),
+                      adds) %>%
+  mutate(sex = factor(c("F","M")[1+sex]))
+phe_cov <- rep(NA, nrow(data_fit))
+phe_cov[!is.na(phe)] <- resid(fit_cov)
+data_fit$phe_cov <- phe_cov
+
+for(i in names(adds)) {
+  tmp <- patterns %>% 
+    filter(max_snp == i) %>% 
+    select(AB1NZCPW,contrast)
+  print(ggplot(data_fit, aes_(as.name(i), as.name("phe_cov"))) +
+          geom_point() + 
+          geom_smooth(method="lm", lty = "dashed", se=FALSE) + 
+          geom_smooth(method="lm", formula = y ~ x + I(x^2), se=FALSE) +
+          facet_wrap(~sex) +
+          ylab(paste(phename, "adj for covars")) +
+          xlab("copies of B6 allele") +
+          ggtitle(paste(i, tmp$AB1NZCPW[1], paste(tmp$contrast, collapse=","))))
+}
+for(i in names(adds)) {
+  tmp <- patterns %>% 
+    filter(max_snp == i) %>% 
+    select(AB1NZCPW,contrast)
+  print(ggplot(data_fit %>% mutate(Wave = wave), 
+               aes_(as.name(i), as.name("phe_cov"), col=as.name("Wave"))) +
+          geom_point() + 
+          geom_smooth(method="lm", lty = "dashed", se=FALSE) +
+          geom_smooth(method="lm", formula = y ~ x + I(x^2), se=FALSE) +
+          facet_wrap(~sex) +
+          ylab(paste(phename, "adj for covars")) +
+          xlab("copies of B6 allele") +
+          ggtitle(paste(i, tmp$AB1NZCPW[1], paste(tmp$contrast, collapse=","))))
+}
+```
+
+```{r}
+patterns %>%
+  filter(max_snp %in% c(add_snp,dom_snp))
+```

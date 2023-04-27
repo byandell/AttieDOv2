@@ -1,0 +1,337 @@
+---
+title: "recla"
+author: "Brian S. Yandell"
+date: "12/8/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE}
+library(dplyr)
+library(qtl2)
+library(qtl2feather)
+library(qtl2pattern)
+library(stringr)
+library(purrr)
+```
+
+```{r}
+project_info <- data.frame(project = "AttieDOv2",
+                           taxa = "CCmouse",
+                           directory = "qtl2shinyData",
+                           stringsAsFactors = FALSE)
+```
+
+```{r}
+project_dir <- file.path(project_info$taxa, project_info$project)
+```
+
+```{r}
+if(!dir.exists(project_dir)) {
+  dir.create(project_dir)
+}
+```
+
+```{r}
+datapath <- "DerivedData"
+```
+
+## Query functions
+
+Use `create_probs_query_func` and `create_mrna_query_func` from package `qtl2pattern` to query genotype probabilities.
+
+```{r}
+query_probs <-  qtl2pattern::create_probs_query_func("qtl2shinyData/CCmouse/AttieDOv2")
+query_mrna   <- qtl2pattern::create_mrna_query_func("qtl2shinyData/CCmouse/AttieDOv2")
+```
+
+```{r}
+saveRDS(query_probs, file.path(project_dir, "query_probs.rds"))
+saveRDS(query_mrna, file.path(project_dir, "query_mrna.rds"))
+```
+
+## Map, phenotypes, covariates
+
+```{r}
+pmap <- readRDS(file.path(datapath, "grid_pmap.rds"))
+saveRDS(pmap, file.path(project_dir, "pmap.rds"))
+```
+
+```{r}
+chrs <- names(pmap)
+```
+
+```{r}
+load(file.path(datapath, "pheno_clin_v5.RData"))
+```
+
+```{r}
+pheno <- pheno_clin %>%
+  select(-(mouse:diet_days), -(DOgen:DOwave5))
+saveRDS(pheno, file.path(project_dir, "pheno_data.rds"))
+```
+
+```{r}
+tmp <- rbind(apply(pheno,2,range, na.rm=TRUE),
++ apply(pheno,2,function(x) sum(x==0, na.rm=TRUE)),
++ apply(pheno,2,function(x) sum(x<0, na.rm=TRUE)))
+rownames(tmp) <- c("min","max","zero","neg")
+t(tmp) %>% head
+```
+
+```{r}
+covar <- pheno_clin %>%
+  select(mouse:num_islets, DOgen:DOwave) %>%
+  mutate(DOwave = as.character(DOwave),
+         DOgen = as.character(DOgen))
+rownames(covar) <- covar$mouse
+```
+
+Additional covariates suggested by Gary. Not used right now.
+
+```{r eval=FALSE}
+covar <- bind_cols(covar,
+                   pheno %>%
+                     select(Ins_0min, # for Glu_0min, Ins_tAUC
+                            Glu_0min, # for Glu_tAUC
+                            Gcg_content, # for Gcc_secreted
+                            G33_ins_secrete_gm, # for G167_ins_secrete_gm, KCl_G33_ins_secrete_gm
+                            G83_ins_secrete_gm, # for G167_ins_secrete_gm, GLP1_G83_ins_secrete_gm, AA_G83_ins_secrete_gm, PA_G167_ins_secrete_gm
+                            G167_ins_secrete_gm)) # for PA_G167_ins_secrete_gm
+```
+
+Need eventually to look at batch and other covariates from AttieDO.
+
+```{r}
+saveRDS(covar, file.path(project_dir, "covar.rds"))
+```
+
+## Genotype probabilities
+
+```{r}
+kinship <- readRDS(file.path(datapath, "kinship_loco_v5.rds"))
+saveRDS(kinship, file.path(project_dir, "kinship.rds"))
+```
+
+8 allele probabilities
+
+```{r}
+feather_dir <- file.path(project_dir, "genoprob")
+if(!file.exists(file.path(feather_dir,
+                          "faprobs.rds"))) {
+  genoprobs <- readRDS(file.path(datapath, "attie_DO500_genoprobs_v5.rds"))
+  if(!dir.exists(feather_dir)) {
+    dir.create(feather_dir)
+  }
+  faprobs <- feather_genoprob(genoprobs, "aprobs", feather_dir, verbose = FALSE)
+  saveRDS(faprobs, file = file.path(feather_dir, "faprobs.rds"))
+} else {
+  faprobs <- readRDS(file.path(feather_dir, "faprobs.rds"))
+}
+```
+
+36 allele pair probabilities
+
+```{r}
+if(!file.exists(file.path(feather_dir,
+                          "fprobs.rds"))) {
+  chr <- names(pmap)[1]
+  
+  geno36_dir <- file.path(datapath, "Genoprobs_36state")
+  probs <- readRDS(file.path(geno36_dir, 
+                             paste0("attie_DO500_genoprobs_v5_36state_chr", 
+                                    chr, 
+                                    ".rds")))
+  fprobs <- qtl2feather::feather_genoprob(probs, "probs", 
+                                        feather_dir, verbose = FALSE)
+  for(chr in names(pmap)[-1]) {
+    cat(chr, "\n")
+    probs <- readRDS(file.path(geno36_dir, 
+                             paste0("attie_DO500_genoprobs_v5_36state_chr", 
+                                    chr, 
+                                    ".rds")))
+    fprobs <- cbind(fprobs, 
+                    qtl2feather::feather_genoprob(probs, "probs", 
+                                                  feather_dir, verbose = FALSE))
+  }
+  saveRDS(fprobs, file = file.path(feather_dir, "fprobs.rds"))
+}
+```
+
+```{r}
+wd <- getwd()
+setwd(datapath)
+feather_aprobs <- readRDS(file.path(datapath, "AttieDOv2/genoprob", "feather_aprobs.rds"))
+fst_aprobs <- qtl2feather::feather2fst_genoprob(feather_aprobs)
+saveRDS(fst_aprobs, file = file.path(datapath, "AttieDOv2/genoprob", "fst_aprobs.rds"))
+feather_probs <- readRDS(file.path(datapath, "AttieDOv2/genoprob", "feather_probs.rds"))
+fst_probs <- qtl2feather::feather2fst_genoprob(feather_probs)
+saveRDS(fst_probs, file = file.path(datapath, "AttieDOv2/genoprob", "fst_probs.rds"))
+setwd(wd)
+```
+
+## Analyses
+
+Revisit wtchg and some things like iAUC. Recompute or us nqrank?
+
+```{r}
+analyses_tbl <- data.frame(pheno = colnames(pheno),
+                           stringsAsFactors = FALSE) %>%
+  mutate(
+    longname = pheno,
+    output = pheno,
+    pheno_group = "clinical",
+    pheno_type = "clinical") %>%
+  mutate(model = "normal",
+         transf = ifelse(pheno == "num_islets", "sqrt", "log"),
+         offset = 0,
+         winsorize = FALSE)
+for(i in names(covar))
+  analyses_tbl[[i]] <- FALSE
+analyses_tbl$sex <- TRUE
+analyses_tbl$DOwave <- TRUE
+analyses_tbl$diet_days <- TRUE
+```
+
+```{r}
+saveRDS(analyses_tbl, file.path(project_dir, "analyses.rds"))
+```
+
+## Genome Scans
+
+```{r}
+if(file.exists("logscans.rds")) {
+  out <- readRDS("logscans.rds")
+} else {
+  form <- formula(paste("~", paste(c("sex","DOwave","diet_days"), collapse = "+")))
+  addcovar <- model.matrix(form, covar)[, -1, drop = FALSE]
+  out <- scan1(faprobs, log(pheno), addcovar=addcovar)
+  saveRDS(out, "logscans.rds")
+}
+```
+
+```{r}
+if(file.exists("sqrtscans.rds")) {
+  outs <- readRDS("sqrtscans.rds")
+} else {
+  form <- formula(paste("~", paste(c("sex","DOwave","diet_days"), collapse = "+")))
+  addcovar <- model.matrix(form, covar)[, -1, drop = FALSE]
+  outs <- scan1(faprobs, sqrt(pheno[,"num_islets", drop = FALSE]), addcovar=addcovar)
+  saveRDS(outs, "sqrtscans.rds")
+}
+```
+
+```{r}
+out <- cbind(out, outs)
+```
+
+```{r}
+peaks <- find_peaks(out, pmap, threshold = 5.5)
+```
+
+## Set up analyses and peaks tables for qtl2shiny
+
+```{r}
+peaks <- peaks %>%
+  rename(
+    pheno = lodcolumn) %>%
+  mutate(
+    longname = pheno,
+    output = pheno,
+    pheno_group = "clinical",
+    pheno_type = "clinical",
+    chr = factor(chr, chrs)) %>%
+  select(-lodindex)
+```
+
+```{r}
+saveRDS(peaks, file.path(project_dir, "peaks.rds"))
+```
+
+```{r}
+pheno_type <- DOread::setup_type(analyses_tbl)
+```
+
+```{r}
+saveRDS(pheno_type, file.path(project_dir, "pheno_type.rds"))
+```
+
+## Hotspots
+
+```{r}
+hots <- qtl2pattern::hotspot(pmap, peaks)
+```
+
+```{r}
+saveRDS(hots, file.path(project_dir, "hotspot.rds"))
+```
+
+## mRNA data
+
+```{r}
+# New data from Dan Gatti and Gary Churchill.
+# Has lots of diplication of stuff created above.
+load(file.path(datapath, "Attie_islet_secr_data_v1.Rdata"))
+```
+
+Add `covar` to `annot.mrna`.
+
+```{r}
+annot.mrna$covar <- "sex,DOwave"
+```
+
+```{r}
+saveRDS(annot.mrna, file = file.path(project_dir, "RNAseq", "annot.mrna.rds"))
+```
+
+Save `rankz.mrna` in feather file. First create mouse ID column
+
+```{r}
+rankz.mrna <- data.frame(Mouse.ID = rownames(rankz.mrna), rankz.mrna,
+                        stringsAsFactors = FALSE)
+```
+
+```{r}
+feather::write_feather(rankz.mrna, file.path(project_dir, "RNAseq", "expr.mrna.feather"))
+```
+
+```{r}
+peaks.mrna <- readRDS(file.path(datapath, "rnaseq_rankz_peaks.rds"))
+```
+
+```{r}
+pheno_tissue <- DOread:::pheno_tissue
+```
+
+Positions in bp, not Mbp.
+
+```{r}
+m <- match(peaks.mrna$lodcolumn, annot.mrna$id)
+peaks.mrna$symbol <- annot.mrna$symbol[m]
+peaks.mrna$gene_chr <- annot.mrna$chr[m]
+peaks.mrna$gene_start <- annot.mrna$start[m]
+peaks.mrna$gene_end <- annot.mrna$end[m]
+peaks.mrna$pos <- peaks.mrna$pos
+```
+
+```{r}
+tissue <- "Islet"
+peaks.mrna <- peaks.mrna %>%
+  mutate(chr = factor(chr, chrs),
+         pheno = pheno_tissue(tissue, symbol, lodcolumn),
+         longname = pheno,
+         output = pheno,
+         pheno_group = "Islet.mRNA",
+         pheno_type = paste("Islet.mRNA", gene_chr, sep = ".")) %>%
+  rename(gene_id = lodcolumn,
+         qtl_chr = chr,
+         qtl_pos = pos) %>%
+  select(-lodindex)
+```
+
+```{r}
+feather::write_feather(peaks.mrna, file.path(project_dir, "RNAseq", "peaks.mrna.feather"))
+```
